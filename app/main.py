@@ -46,7 +46,7 @@ class AIOrderConfig(BaseModel):
     max_stocks: int = 5  # Max number of stocks to buy
     penny_stock_threshold: float = 50.0  # Price below which a stock is considered a penny stock
     min_growth_percent: float = 5.0  # Minimum price growth percentage over the lookback period
-    avg_volume: int = 10
+    avg_volume: int = 1000
 
 # Root endpoint
 @app.get("/")
