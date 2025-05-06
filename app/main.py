@@ -193,8 +193,9 @@ async def find_penny_stocks(config: AIOrderConfig):
         lookback_days = 30
         end_date = datetime.now()
         start_date = end_date - timedelta(days=lookback_days)
-        
-        for instrument in instruments[:100]:  # Limit to 100 for simplicity; adjust in production
+
+        print("Num instruments", len(instruments))
+        for instrument in instruments:  # Limit to 100 for simplicity; adjust in production
             if instrument["segment"] != "NSE-EQ" or instrument["last_price"] > config.penny_stock_threshold:
                 continue
             
@@ -207,6 +208,7 @@ async def find_penny_stocks(config: AIOrderConfig):
                     interval="day"
                 )
                 
+
                 if len(historical) < 5:  # Ensure enough data points
                     continue
                 
@@ -217,6 +219,7 @@ async def find_penny_stocks(config: AIOrderConfig):
                 # Check volume trend
                 volumes = [data["volume"] for data in historical]
                 avg_volume = np.mean(volumes)
+                print("AVG Volume", avg_volume, config.avg_volume)
                 
                 if growth_percent >= config.min_growth_percent and avg_volume > config.avg_volume:  # Basic filter
                     penny_stocks.append({
@@ -240,6 +243,7 @@ async def find_penny_stocks(config: AIOrderConfig):
 # AI-driven order placement endpoint
 @app.post("/api/ai-place-orders")
 async def ai_place_orders(config: AIOrderConfig):
+    print("CONFIG", config)
     if KITE_ID not in session_storage:
         logger.error("No access_token found for user")
         raise HTTPException(status_code=401, detail="Not authenticated")
