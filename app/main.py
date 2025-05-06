@@ -248,6 +248,7 @@ async def ai_place_orders(config: AIOrderConfig):
                     logger.info(f"Skipping {stock['tradingsymbol']} due to insufficient funds for 1 share")
                     continue
                 
+                print("Placing bet for ", stock, quantity)
                 order_response = kite.place_order(
                     variety=kite.VARIETY_REGULAR,
                     exchange="NSE",
