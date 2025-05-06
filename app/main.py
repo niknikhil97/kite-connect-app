@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # Health check endpoint
+@app.get("/")
+async def health_check():
+    return JSONResponse(content={"status": "ok", "message": "Welcome to kite connect app"}, status_code=200)
+
+# Health check endpoint
 @app.get("/api/health")
 async def health_check():
     return JSONResponse(content={"status": "ok"}, status_code=200)
