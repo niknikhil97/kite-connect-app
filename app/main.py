@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from kiteconnect import KiteConnect
 from dotenv import load_dotenv
 import uvicorn
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import numpy as np
 
 # Configure logging
@@ -27,7 +27,7 @@ KITE_API_KEY = os.getenv("KITE_API_KEY")
 KITE_SECRET = os.getenv("KITE_SECRET")
 KITE_ID = os.getenv("KITE_ID")
 
-# In-memory storage for access token (for simplicity; use a database in production)
+# In-memory storage for access token (use database in production)
 session_storage = {}
 
 # Initialize KiteConnect client
@@ -37,16 +37,16 @@ kite = KiteConnect(api_key=KITE_API_KEY)
 class OrderRequest(BaseModel):
     tradingsymbol: str
     quantity: int
-    transaction_type: str = "BUY"  # BUY or SELL
+    transaction_type: str = "BUY"
     exchange: str = "NSE"
 
 # Pydantic model for AI order configuration
 class AIOrderConfig(BaseModel):
-    max_investment: float = 10000.0  # Max amount to invest per run
-    max_stocks: int = 5  # Max number of stocks to buy
-    penny_stock_threshold: float = 50.0  # Price below which a stock is considered a penny stock
-    min_growth_percent: float = 5.0  # Minimum price growth percentage over the lookback period
-    avg_volume: int = 1000
+    max_investment: float = 10000.0
+    max_stocks: int = 5
+    penny_stock_threshold: float = 50.0
+    min_growth_percent: float = 10.0
+    avg_volume: int = 5000
 
 # Root endpoint
 @app.get("/")
@@ -61,11 +61,9 @@ async def health_check():
 # Redirect endpoint for Kite Connect OAuth flow
 @app.get("/kite-redirect")
 async def kite_redirect(request: Request):
-    # Extract query parameters
     query_params = dict(request.query_params)
     request_token = query_params.get("request_token")
     
-    # Log query parameters
     logger.info(f"Received redirect request with query params: {query_params}")
     
     if not request_token:
@@ -73,22 +71,18 @@ async def kite_redirect(request: Request):
         raise HTTPException(status_code=400, detail="Missing request_token")
     
     try:
-        # Exchange request_token for access_token
         data = kite.generate_session(request_token, api_secret=KITE_SECRET)
         access_token = data["access_token"]
-        
-        # Store access_token in memory
         session_storage[KITE_ID] = access_token
         kite.set_access_token(access_token)
         
         logger.info(f"Successfully generated access_token for user: {KITE_ID}")
         
-        response = {
+        return JSONResponse(content={
             "message": "Authentication successful",
             "user_id": KITE_ID,
-            "access_token": access_token  # For debugging; remove in production
-        }
-        return JSONResponse(content=response, status_code=200)
+            "access_token": access_token
+        }, status_code=200)
     except Exception as e:
         logger.error(f"Failed to generate session: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
@@ -96,25 +90,18 @@ async def kite_redirect(request: Request):
 # Postback endpoint for Kite Connect order updates
 @app.post("/kite-postback")
 async def kite_postback(request: Request):
-    # Extract JSON payload
     try:
         payload = await request.json()
     except Exception as e:
         logger.error(f"Failed to parse postback payload: {str(e)}")
-        return JSONResponse(
-            content={"message": "Invalid payload"},
-            status_code=400
-        )
+        return JSONResponse(content={"message": "Invalid payload"}, status_code=400)
     
-    # Log payload
     logger.info(f"Received postback with payload: {payload}")
     
-    # Example response (Kite Connect expects a 200 status)
-    response = {
+    return JSONResponse(content={
         "message": "Postback received",
         "payload": payload
-    }
-    return JSONResponse(content=response, status_code=200)
+    }, status_code=200)
 
 # Profile endpoint to fetch user profile
 @app.get("/api/profile")
@@ -124,10 +111,7 @@ async def get_profile():
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     try:
-        # Set access_token for the request
         kite.set_access_token(session_storage[KITE_ID])
-        
-        # Fetch user profile
         profile = kite.profile()
         logger.info(f"Fetched profile for user: {KITE_ID}")
         
@@ -147,10 +131,7 @@ async def place_order(order: OrderRequest):
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     try:
-        # Set access_token for the request
         kite.set_access_token(session_storage[KITE_ID])
-        
-        # Place a market order
         order_response = kite.place_order(
             variety=kite.VARIETY_REGULAR,
             exchange=order.exchange,
@@ -182,106 +163,91 @@ async def check_available_funds():
         logger.error(f"Failed to check funds: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to check funds: {str(e)}")
 
-# Fetch penny stocks with growth potential
-async def find_penny_stocks(config: AIOrderConfig):
+# Fetch stocks with high growth potential
+async def find_high_growth_stocks(config: AIOrderConfig):
     try:
         kite.set_access_token(session_storage[KITE_ID])
-        # Fetch all instruments for NSE
         instruments = kite.instruments(exchange="NSE")
         
-        penny_stocks = []
-        lookback_days = 30
-        end_date = datetime.now()
+        high_growth_stocks = []
+        lookback_days = 5
+        end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=lookback_days)
 
-        print("Num instruments", len(instruments))
-        segments = set()
-        shistorical = set()
-        for instrument in instruments:  # Limit to 100 for simplicity; adjust in production
-            segments.add(instrument["segment"])
-            if instrument["segment"] != "NSE-EQ" or instrument["last_price"] > config.penny_stock_threshold:
-                continue
-            
-            # Fetch historical data
+        for instrument in instruments:
             try:
                 historical = kite.historical_data(
-                    instrument_id=instrument["instrument_token"],
-                    from_date=start_date.strftime("%Y-%m-%d"),
-                    to_date=end_date.strftime("%Y-%m-%d"),
+                    instrument_token=instrument["instrument_token"],
+                    from_date=start_date,
+                    to_date=end_date,
                     interval="day"
                 )
                 
-                shistorical.add(historical)
-                if len(historical) < 5:  # Ensure enough data points
+                if len(historical) < lookback_days:
                     continue
                 
-                # Calculate growth
                 prices = [data["close"] for data in historical]
-                growth_percent = ((prices[-1] - prices[0]) / prices[0]) * 100 if prices[0] != 0 else 0
-                
-                # Check volume trend
                 volumes = [data["volume"] for data in historical]
-                avg_volume = np.mean(volumes)
-                print("AVG Volume", avg_volume, config.avg_volume)
                 
-                if growth_percent >= config.min_growth_percent and avg_volume > config.avg_volume:  # Basic filter
-                    penny_stocks.append({
+                latest_price = prices[-1]
+                if latest_price > config.penny_stock_threshold or latest_price <= 0:
+                    continue
+                
+                growth_percent = ((prices[-1] - prices[0]) / prices[0]) * 100 if prices[0] != 0 else 0
+                avg_volume = np.mean(volumes)
+                volume_trend = (volumes[-1] / volumes[0]) if volumes[0] != 0 else 1
+                
+                if (growth_percent >= config.min_growth_percent and 
+                    avg_volume >= config.avg_volume and 
+                    volume_trend > 1.2):  # Require increasing volume
+                    high_growth_stocks.append({
                         "tradingsymbol": instrument["tradingsymbol"],
-                        "last_price": instrument["last_price"],
+                        "last_price": latest_price,
                         "growth_percent": growth_percent,
-                        "avg_volume": avg_volume
+                        "avg_volume": avg_volume,
+                        "volume_trend": volume_trend
                     })
             except Exception as e:
                 logger.warning(f"Failed to fetch historical data for {instrument['tradingsymbol']}: {str(e)}")
                 continue
         
-        # Sort by growth percent
-        penny_stocks = sorted(penny_stocks, key=lambda x: x["growth_percent"], reverse=True)[:config.max_stocks]
-        logger.info(f"Found {len(penny_stocks)} penny stocks with growth potential")
-        print("Segments", segments)
-        print("shistorical", shistorical)
-        return penny_stocks
+        high_growth_stocks = sorted(high_growth_stocks, key=lambda x: x["growth_percent"] * x["volume_trend"], reverse=True)[:config.max_stocks]
+        logger.info(f"Found {len(high_growth_stocks)} high growth stocks")
+        return high_growth_stocks
     except Exception as e:
-        logger.error(f"Failed to find penny stocks: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to find penny stocks: {str(e)}")
+        logger.error(f"Failed to find high growth stocks: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to find high growth stocks: {str(e)}")
 
 # AI-driven order placement endpoint
 @app.post("/api/ai-place-orders")
 async def ai_place_orders(config: AIOrderConfig):
-    print("CONFIG", config)
     if KITE_ID not in session_storage:
         logger.error("No access_token found for user")
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     try:
-        # Check available funds
         available_funds = await check_available_funds()
-        if available_funds < 1000:  # Minimum threshold
+        if available_funds < 1000:
             logger.warning("Insufficient funds for AI trading")
             raise HTTPException(status_code=400, detail="Insufficient funds for trading")
         
-        # Cap investment to available funds
-        max_investment = min(config.max_investment, available_funds * 0.8)  # Use 80% of funds for safety
+        max_investment = min(config.max_investment, available_funds * 0.8)
+        high_growth_stocks = await find_high_growth_stocks(config)
         
-        # Find penny stocks
-        penny_stocks = await find_penny_stocks(config)
-        if not penny_stocks:
-            logger.info("No suitable penny stocks found")
-            raise HTTPException(status_code=404, detail="No suitable penny stocks found")
+        if not high_growth_stocks:
+            logger.info("No suitable high growth stocks found")
+            raise HTTPException(status_code=404, detail="No suitable high growth stocks found")
         
-        # Distribute investment across stocks
-        investment_per_stock = max_investment / min(config.max_stocks, len(penny_stocks))
+        investment_per_stock = max_investment / min(config.max_stocks, len(high_growth_stocks))
         orders_placed = []
         
-        for stock in penny_stocks:
+        for stock in high_growth_stocks:
             try:
-                # Calculate quantity based on last price
                 quantity = int(investment_per_stock / stock["last_price"])
                 if quantity < 1:
                     logger.info(f"Skipping {stock['tradingsymbol']} due to insufficient funds for 1 share")
                     continue
                 
-                # Place market order
                 order_response = kite.place_order(
                     variety=kite.VARIETY_REGULAR,
                     exchange="NSE",
@@ -314,6 +280,5 @@ async def ai_place_orders(config: AIOrderConfig):
         logger.error(f"Failed to process AI orders: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process AI orders: {str(e)}")
 
-# Run the app with Uvicorn
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=443)
