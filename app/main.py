@@ -195,7 +195,10 @@ async def find_penny_stocks(config: AIOrderConfig):
         start_date = end_date - timedelta(days=lookback_days)
 
         print("Num instruments", len(instruments))
+        segments = set()
+        shistorical = set()
         for instrument in instruments:  # Limit to 100 for simplicity; adjust in production
+            segments.add(instrument["segment"])
             if instrument["segment"] != "NSE-EQ" or instrument["last_price"] > config.penny_stock_threshold:
                 continue
             
@@ -208,7 +211,7 @@ async def find_penny_stocks(config: AIOrderConfig):
                     interval="day"
                 )
                 
-
+                shistorical.add(historical)
                 if len(historical) < 5:  # Ensure enough data points
                     continue
                 
@@ -235,6 +238,8 @@ async def find_penny_stocks(config: AIOrderConfig):
         # Sort by growth percent
         penny_stocks = sorted(penny_stocks, key=lambda x: x["growth_percent"], reverse=True)[:config.max_stocks]
         logger.info(f"Found {len(penny_stocks)} penny stocks with growth potential")
+        print("Segments", segments)
+        print("shistorical", shistorical)
         return penny_stocks
     except Exception as e:
         logger.error(f"Failed to find penny stocks: {str(e)}")
