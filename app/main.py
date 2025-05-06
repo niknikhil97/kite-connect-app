@@ -46,6 +46,7 @@ class AIOrderConfig(BaseModel):
     max_stocks: int = 5  # Max number of stocks to buy
     penny_stock_threshold: float = 50.0  # Price below which a stock is considered a penny stock
     min_growth_percent: float = 5.0  # Minimum price growth percentage over the lookback period
+    avg_volume: int = 10
 
 # Root endpoint
 @app.get("/")
@@ -217,7 +218,7 @@ async def find_penny_stocks(config: AIOrderConfig):
                 volumes = [data["volume"] for data in historical]
                 avg_volume = np.mean(volumes)
                 
-                if growth_percent >= config.min_growth_percent and avg_volume > 10000:  # Basic filter
+                if growth_percent >= config.min_growth_percent and avg_volume > config.avg_volume:  # Basic filter
                     penny_stocks.append({
                         "tradingsymbol": instrument["tradingsymbol"],
                         "last_price": instrument["last_price"],
